@@ -1,0 +1,21 @@
+# /docker-compose.yml
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount the model weights so Docker can access them without copying gigabytes of data
+      - ./model:/app/model
+    environment:
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - EE_PROJECT_ID=geosentinel-ai-511016
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
