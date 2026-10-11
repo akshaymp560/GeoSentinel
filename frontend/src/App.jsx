@@ -1,0 +1,33 @@
+import React, { useEffect, useState } from 'react';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import Header from './components/common/Header';
+import InvestigationSidebar from './components/common/InvestigationSidebar';
+import Screen1Landing from './components/screens/Screen1Landing';
+import Screen2Location from './components/screens/Screen2Location';
+import Screen4Processing from './components/screens/Screen4Processing';
+import Screen6Evidence from './components/screens/Screen6Evidence';
+import Screen3DateSelection from './components/screens/Screen3DateSelection';
+import { ScreenExplorer, ScreenReport } from './components/screens/InvestigationScreens';
+import { executeChangeDetection, normalizeApiError } from './services/api';
+
+export const SCREENS = ['LANDING', 'LOCATION_AOI', 'DATE_SCENES', 'PROCESSING', 'EXPLORER', 'EVIDENCE', 'REPORT'];
+const STORAGE_KEY = 'geosentinel-investigation-state';
+const initialWorkflow = { aoi: { name: '', centroid: '', bbox: null, areaKm2: null, type: 'Rectangle' }, dates: { from: '', to: '', beforeDate: '', afterDate: '', preStart: '', preEnd: '', postStart: '', postEnd: '' }, scenes: { before: null, after: null }, pipelineProgress: { currentStage: 0, totalStages: 9, percentage: null, stages: [] }, investigationData: null };
+
+function readStoredWorkflow() { try { const saved = sessionStorage.getItem(STORAGE_KEY); return saved ? { ...initialWorkflow, ...JSON.parse(saved) } : initialWorkflow; } catch { return initialWorkflow; } }
+function currentId(pathname) { return pathname.match(/^\/investigations\/([^/]+)/)?.[1] || null; }
+function screenFromPath(pathname) { if (pathname === '/') return 'LANDING'; if (pathname === '/investigations/new') return 'LOCATION_AOI'; if (pathname.endsWith('/dates')) return 'DATE_SCENES'; if (pathname.endsWith('/processing')) return 'PROCESSING'; if (pathname.endsWith('/explorer')) return 'EXPLORER'; if (pathname.endsWith('/evidence')) return 'EVIDENCE'; if (pathname.endsWith('/report')) return 'REPORT'; return 'LANDING'; }
+
+function Application() {
+  const location = useLocation(); const navigate = useNavigate(); const [workflow, setWorkflow] = useState(readStoredWorkflow); const [analysisStatus, setAnalysisStatus] = useState(() => readStoredWorkflow().investigationData ? 'success' : 'idle'); const [analysisError, setAnalysisError] = useState(''); const screen = screenFromPath(location.pathname); const routeId = currentId(location.pathname);
+  useEffect(() => { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(workflow)); }, [workflow]);
+  useEffect(() => { document.title = screen === 'LANDING' ? 'GeoSentinel-AI | Earth observation research' : `GeoSentinel-AI | ${screen.replaceAll('_', ' ')}`; }, [screen]);
+  const pathFor = target => { const id = workflow.investigationData?.job_id || routeId || 'draft'; return { LANDING: '/', LOCATION_AOI: '/investigations/new', DATE_SCENES: `/investigations/${id}/dates`, PROCESSING: `/investigations/${id}/processing`, EXPLORER: `/investigations/${id}/explorer`, EVIDENCE: `/investigations/${id}/evidence`, REPORT: `/investigations/${id}/report` }[target]; };
+  const navigateTo = target => { if (!SCREENS.includes(target)) return; if (target === 'LOCATION_AOI' && screen !== 'LOCATION_AOI') { setWorkflow(current => ({ ...current, investigationData: null, scenes: { before: null, after: null }, pipelineProgress: initialWorkflow.pipelineProgress })); setAnalysisStatus('idle'); setAnalysisError(''); } navigate(pathFor(target)); };
+  const selectLocation = result => { setWorkflow(current => ({ ...current, aoi: { ...current.aoi, name: result.displayName, centroid: result.lat.toFixed(5) + '°N, ' + result.lon.toFixed(5) + '°E', bbox: null, type: 'Rectangle' } })); navigateTo('LOCATION_AOI'); };
+  const startAnalysis = async () => { const { bbox } = workflow.aoi; const { preStart, preEnd, postStart, postEnd } = workflow.dates; if (!Array.isArray(bbox) || bbox.length !== 4) return setAnalysisError('Draw a valid region before starting analysis.'); if (!preStart || !preEnd || !postStart || !postEnd || preStart > preEnd || postStart > postEnd) return setAnalysisError('Enter valid pre-event and post-event date windows before starting analysis.'); setWorkflow(current => ({ ...current, investigationData: null })); setAnalysisStatus('running'); setAnalysisError(''); navigateTo('PROCESSING'); try { const result = await executeChangeDetection({ bbox, dates: workflow.dates }); setWorkflow(current => ({ ...current, investigationData: result, scenes: { before: { date: result.metadata?.pre_acquisition_date || null }, after: { date: result.metadata?.post_acquisition_date || null } }, pipelineProgress: { currentStage: 9, totalStages: 9, percentage: 100, stages: [] } })); setAnalysisStatus('success'); if (result.job_id) navigate(`/investigations/${result.job_id}/processing`, { replace: true }); } catch (error) { setAnalysisStatus('error'); setAnalysisError(normalizeApiError(error)); } };
+  const shell = (child, id = routeId) => <div className="flex h-screen min-h-screen flex-col overflow-hidden bg-canvas text-zinc-200"><Header screen={screen} investigationId={id || workflow.investigationData?.job_id} navigateTo={navigateTo} /><div className="flex min-h-0 flex-1">{['EXPLORER', 'EVIDENCE', 'REPORT'].includes(screen) && <InvestigationSidebar screen={screen} navigateTo={navigateTo} />}{child}</div></div>;
+  return <Routes><Route path="/" element={shell(<Screen1Landing selectLocation={selectLocation} />, null)} /><Route path="/investigations/new" element={shell(<Screen2Location workflow={workflow} setWorkflow={setWorkflow} navigateTo={navigateTo} />, null)} /><Route path="/investigations/:id/dates" element={shell(<Screen3DateSelection workflow={workflow} setWorkflow={setWorkflow} navigateTo={navigateTo} startAnalysis={startAnalysis} analysisStatus={analysisStatus} />)} /><Route path="/investigations/:id/processing" element={shell(<Screen4Processing workflow={workflow} analysisStatus={analysisStatus} analysisError={analysisError} startAnalysis={startAnalysis} navigateTo={navigateTo} />)} /><Route path="/investigations/:id/explorer" element={shell(<ScreenExplorer workflow={workflow} navigateTo={navigateTo} />)} /><Route path="/investigations/:id/evidence" element={shell(<Screen6Evidence workflow={workflow} navigateTo={navigateTo} />)} /><Route path="/investigations/:id/report" element={shell(<ScreenReport workflow={workflow} />)} /><Route path="*" element={<Navigate to="/" replace />} /></Routes>;
+}
+
+export default function App() { return <BrowserRouter><Application /></BrowserRouter>; }
